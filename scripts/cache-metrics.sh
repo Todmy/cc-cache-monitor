@@ -96,8 +96,9 @@ if [[ -f "$STATE_FILE" ]]; then
   PREV_COST_HISTORY=$(jq -c '.cost_history // []' "$STATE_FILE" 2>/dev/null || echo "[]")
 fi
 
-# Extract session_id from JSONL (system message, usually first line)
-CURRENT_SESSION_ID=$(head -1 "$JSONL" | jq -r '.sessionId // ""' 2>/dev/null || echo "")
+# Extract session_id from JSONL (may be on line 1, 2, or 3 — varies by session type)
+CURRENT_SESSION_ID=$(head -5 "$JSONL" | jq -r 'select(.sessionId != null) | .sessionId' 2>/dev/null | head -1)
+CURRENT_SESSION_ID="${CURRENT_SESSION_ID:-}"
 
 # Reset accumulators if session changed
 if [[ -n "$CURRENT_SESSION_ID" && "$CURRENT_SESSION_ID" != "$PREV_SESSION_ID" && -n "$PREV_SESSION_ID" ]]; then
