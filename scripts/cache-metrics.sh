@@ -86,7 +86,7 @@ printf '%s\n%s\n%s' "$JSONL" "$JSONL_MTIME" "$(date +%s)" > "$MTIME_FILE"
 # ──────────────────────────────────────────────────────────
 
 tail -200 "$JSONL" | jq -s '
-  # Extract assistant messages with usage data
+  # ── v1: Extract assistant messages with usage data ──
   [.[] | select(.type == "assistant" and .message.usage.output_tokens != null)
        | .message.usage
        | {
@@ -95,14 +95,14 @@ tail -200 "$JSONL" | jq -s '
            inp: (.input_tokens // 0),
            out: (.output_tokens // 0)
          }
-  ] |
+  ] as $calls |
 
-  if length == 0 then halt
+  if ($calls | length) == 0 then halt
   else
-    . as $calls | length as $count |
+    ($calls | length) as $count |
 
     # Per-call cache hit percentages
-    [.[] | if (.cr + .cw) > 0 then .cr / (.cr + .cw) * 100 else 0 end] as $pcts |
+    [$calls[] | if (.cr + .cw) > 0 then .cr / (.cr + .cw) * 100 else 0 end] as $pcts |
 
     # Rolling average over last 3 calls
     ($pcts | if length > 3 then .[-3:] else . end | add / length) as $rolling |
@@ -114,7 +114,7 @@ tail -200 "$JSONL" | jq -s '
     (if ($pcts | length) >= 2 then ($prev - $pcts[-1]) > 50 else false end) as $cliff |
 
     # Cumulative session cost (Opus 4.6: input $5/M, output $25/M, cw $6.25/M, cr $0.50/M)
-    ([.[] | .inp * 5 / 1000000 + .out * 25 / 1000000 + .cw * 6.25 / 1000000 + .cr * 0.5 / 1000000] | add) as $cost |
+    ([$calls[] | .inp * 5 / 1000000 + .out * 25 / 1000000 + .cw * 6.25 / 1000000 + .cr * 0.5 / 1000000] | add) as $cost |
 
     # Status (evaluated in spec order)
     (if $count < 5 then "WARM"
@@ -126,6 +126,33 @@ tail -200 "$JSONL" | jq -s '
     # Rolling pcts array (last 3)
     [$pcts | if length > 3 then .[-3:] else . end | .[] | . * 10 | round / 10] as $rolling_pcts |
 
+    # ── v2: Extract subagent invocations from Agent tool_use blocks ──
+    [.[] | select(.type == "assistant")
+         | .message.content // []
+         | .[]
+         | select(type == "object" and .type == "tool_use" and .name == "Agent")
+         | {
+             id: .id,
+             description: (.input.description // "unnamed"),
+             agent_type: (.input.subagent_type // "unknown")
+           }
+    ] as $agent_uses |
+
+    # Build tool_result lookup: tool_use_id -> line index
+    # (For now, just count agents — attribution computed below)
+    ($agent_uses | length) as $sub_count |
+
+    # Simple subagent info (count + descriptions, no positional attribution in hook)
+    # Positional attribution is complex and done in /usage-details Python script.
+    # Hook provides count + metadata for statusline.
+    [$agent_uses[] | {
+      description: .description,
+      type: .agent_type,
+      calls: 0,
+      cost_usd: 0,
+      cache_pct: 0
+    }] as $subagents |
+
     {
       ts: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
       status: $status,
@@ -136,7 +163,9 @@ tail -200 "$JSONL" | jq -s '
       calls_count: $count,
       last_cw: ($calls[-1].cw),
       last_cr: ($calls[-1].cr),
-      rolling_pcts: $rolling_pcts
+      rolling_pcts: $rolling_pcts,
+      subagent_count: $sub_count,
+      subagents: $subagents
     }
   end
 ' > "$STATE_FILE" 2>/dev/null || true

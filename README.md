@@ -72,6 +72,29 @@ CLIFF at 03:33:32 — cache hit dropped from 99.3% to 5.0%
 | CRON     |      5 |        16 | $40.56 | 31% |
 ```
 
+**Subagent cost breakdown** (v2) — shows which Agent subagents were expensive:
+```
+| # | Description          | Type            | Calls | Cost   | Cache % |
+|---|----------------------|-----------------|-------|--------|---------|
+| 1 | Research LinkedIn API| general-purpose | 12    | $4.50  | 85%     |
+| 2 | Explore codebase     | Explore         | ~8    | ~$2.10 | 92%     |
+| 3 | Research docs        | general-purpose | ~6    | ~$1.80 | 88%     |
+```
+
+Subagent costs are already included in the session total — the table shows how that total breaks down. The `~` prefix marks parallel subagents where attribution is approximate.
+
+## v2: Subagent Tracking
+
+When your session spawns subagents via the Agent tool, the statusline shows a count:
+
+```
+cache: OK 98% +3 subs     ← 3 subagents detected
+cache: DRIFT 82% +1 sub   ← 1 subagent detected
+cache: OK 98%              ← no subagents (v1 behavior)
+```
+
+Run `/usage-details` to see which subagents were expensive and where the tokens went. Subagent API calls are already counted in the session total — the indicator just makes their presence visible.
+
 ### Multi-session overview
 
 ```bash

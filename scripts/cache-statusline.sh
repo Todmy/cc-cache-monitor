@@ -36,7 +36,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
 fi
 
 # Read fields from state (single jq call)
-read -r status pct cost < <(jq -r '[.status // "?", (.cache_hit_pct // 0 | tostring), (.session_cost_usd // 0 | tostring)] | join(" ")' "$STATE_FILE" 2>/dev/null || echo "? 0 0")
+read -r status pct sub_count < <(jq -r '[.status // "?", (.cache_hit_pct // 0 | tostring), (.subagent_count // 0 | tostring)] | join(" ")' "$STATE_FILE" 2>/dev/null || echo "? 0 0")
 
 # ANSI 256-color codes
 GREEN=40
@@ -47,27 +47,35 @@ GREY=245
 # Round pct to integer
 pct_int=${pct%%.*}
 
+# Build subagent suffix
+sub_suffix=""
+sub_count_int=${sub_count%%.*}
+if (( sub_count_int > 0 )); then
+  if (( sub_count_int == 1 )); then
+    sub_suffix=" +1 sub"
+  else
+    sub_suffix=" +${sub_count_int} subs"
+  fi
+fi
+
 # Select color and format by status
 case "$status" in
   WARM)
-    printf "\033[38;5;${GREY}mcache: WARM\033[0m"
+    printf "\033[38;5;${GREY}mcache: WARM%s\033[0m" "$sub_suffix"
     ;;
   CLIFF)
-    printf "\033[38;5;${RED};1mcache: CLIFF %s%%\033[0m" "$pct_int"
+    printf "\033[38;5;${RED};1mcache: CLIFF %s%%%s\033[0m" "$pct_int" "$sub_suffix"
     ;;
   OK)
-    printf "\033[38;5;${GREEN}mcache: OK %s%%\033[0m" "$pct_int"
+    printf "\033[38;5;${GREEN}mcache: OK %s%%%s\033[0m" "$pct_int" "$sub_suffix"
     ;;
   DRIFT)
-    printf "\033[38;5;${YELLOW}mcache: DRIFT %s%%\033[0m" "$pct_int"
+    printf "\033[38;5;${YELLOW}mcache: DRIFT %s%%%s\033[0m" "$pct_int" "$sub_suffix"
     ;;
   MISS)
-    printf "\033[38;5;${RED}mcache: MISS %s%%\033[0m" "$pct_int"
+    printf "\033[38;5;${RED}mcache: MISS %s%%%s\033[0m" "$pct_int" "$sub_suffix"
     ;;
   *)
     printf "cache: -"
     ;;
 esac
-
-# Append session cost
-printf " \$%s" "$cost"

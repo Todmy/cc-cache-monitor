@@ -1,6 +1,6 @@
 ---
 name: usage-details
-description: Analyze Claude Code session cache efficiency — hourly timeline, cliff detection, trigger attribution. Run with no args for current session, or specify session ID / --since date / --list.
+description: Analyze Claude Code session cache efficiency — hourly timeline, cliff detection, trigger attribution, subagent cost breakdown. Run with no args for current session, or specify session ID / --since date / --list.
 ---
 
 # Cache Usage Details
@@ -50,7 +50,9 @@ else:
 "
 ```
 
-## Step 2: For single session — run all 3 analyses
+## Step 2: For single session — run all 4 analyses
+
+Run 2a (Hourly Timeline), 2b (Cliff Detection), 2c (Trigger Attribution), and 2d (Subagent Sessions). Step 2d is skipped automatically if no Agent tool_use blocks are found. Replace `SESSION_PATH_HERE` with the actual path from Step 1 in each script.
 
 ### 2a. Hourly Cache Timeline
 
@@ -227,6 +229,133 @@ for t in sorted(triggers.keys(), key=lambda x: -triggers[x]['cost']):
     pct = info['cost']/total_cost*100 if total_cost > 0 else 0
     print(f"| {t} | {info['events']} | {info['api_calls']} | ${info['cost']:.2f} | {pct:.0f}% |")
 print(f"| **TOTAL** | | | **${total_cost:.2f}** | |")
+PYEOF
+```
+
+### 2d. Subagent Sessions
+
+Skip this section entirely if no Agent tool_use blocks are found in the JSONL.
+
+```bash
+python3 << 'PYEOF'
+import sys, json
+
+transcript = "SESSION_PATH_HERE"  # Replace with actual path
+
+messages = []
+with open(transcript) as f:
+    for line in f:
+        try: messages.append(json.loads(line.strip()))
+        except: continue
+
+# Find Agent tool_use blocks and their positions
+agent_invocations = []  # [{id, description, type, msg_index}]
+tool_result_map = {}    # tool_use_id -> msg_index
+
+for i, m in enumerate(messages):
+    if m.get('type') == 'assistant':
+        content = m.get('message', {}).get('content', [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Agent':
+                    inp = block.get('input', {})
+                    agent_invocations.append({
+                        'id': block.get('id', ''),
+                        'description': inp.get('description', 'unnamed'),
+                        'type': inp.get('subagent_type', 'unknown'),
+                        'start_idx': i,
+                        'end_idx': None,
+                    })
+    elif m.get('type') == 'user':
+        content = m.get('message', {}).get('content', [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'tool_result':
+                    tool_result_map[block.get('tool_use_id', '')] = i
+
+if not agent_invocations:
+    sys.exit(0)
+
+# Match tool_results to agent invocations
+for agent in agent_invocations:
+    agent['end_idx'] = tool_result_map.get(agent['id'])
+
+# Collect all assistant messages with usage data and their indices
+usage_calls = []
+for i, m in enumerate(messages):
+    if m.get('type') == 'assistant':
+        usage = m.get('message', {}).get('usage', {})
+        if usage and 'output_tokens' in usage:
+            cw = usage.get('cache_creation_input_tokens', 0)
+            cr = usage.get('cache_read_input_tokens', 0)
+            inp = usage.get('input_tokens', 0)
+            out = usage.get('output_tokens', 0)
+            cost = inp*5/1e6 + out*25/1e6 + cw*6.25/1e6 + cr*0.50/1e6
+            total_cache = cw + cr
+            pct = (cr / total_cache * 100) if total_cache > 0 else 0
+            usage_calls.append({'idx': i, 'cost': cost, 'pct': pct})
+
+# Positional attribution: for each usage call, count how many agents are "active"
+# An agent is active if start_idx < usage_call_idx < end_idx (or end_idx is None = running)
+for uc in usage_calls:
+    active_agents = []
+    for j, agent in enumerate(agent_invocations):
+        start = agent['start_idx']
+        end = agent['end_idx']
+        if start < uc['idx'] and (end is None or uc['idx'] < end):
+            active_agents.append(j)
+    uc['active_agents'] = active_agents
+
+# Aggregate per agent
+for agent in agent_invocations:
+    agent['calls'] = 0
+    agent['cost'] = 0.0
+    agent['cache_pcts'] = []
+
+for uc in usage_calls:
+    n = len(uc['active_agents'])
+    if n == 0:
+        continue
+    share = 1.0 / n
+    for j in uc['active_agents']:
+        agent_invocations[j]['calls'] += share
+        agent_invocations[j]['cost'] += uc['cost'] * share
+        agent_invocations[j]['cache_pcts'].append(uc['pct'])
+
+# Compute total session cost for context
+total_cost = sum(uc['cost'] for uc in usage_calls)
+total_calls = len(usage_calls)
+
+print("## Subagent Sessions")
+print()
+print(f"| # | Description | Type | Calls | Cost | Cache % |")
+print(f"|---|-------------|------|-------|------|---------|")
+
+attributed_calls = 0
+attributed_cost = 0.0
+for i, agent in enumerate(agent_invocations):
+    calls = agent['calls']
+    cost = agent['cost']
+    avg_pct = sum(agent['cache_pcts']) / len(agent['cache_pcts']) if agent['cache_pcts'] else 0
+
+    # Mark parallel-attributed with ~
+    is_parallel = any(len(uc['active_agents']) > 1 for uc in usage_calls if any(j == i for j in uc['active_agents']))
+    prefix = "~" if is_parallel else ""
+
+    if agent['end_idx'] is None:
+        # In-progress
+        print(f"| {i+1} | {agent['description']} | {agent['type']} | (running) | — | — |")
+    else:
+        print(f"| {i+1} | {agent['description']} | {agent['type']} | {prefix}{calls:.0f} | {prefix}${cost:.2f} | {avg_pct:.0f}% |")
+        attributed_calls += calls
+        attributed_cost += cost
+
+parent_calls = total_calls - attributed_calls
+parent_cost = total_cost - attributed_cost
+print(f"| | **Subtotal (subagents)** | | **{attributed_calls:.0f}** | **${attributed_cost:.2f}** | |")
+if parent_calls > 0:
+    print(f"| | Parent-only calls | | {parent_calls:.0f} | ${parent_cost:.2f} | |")
+print(f"| | **Session total** | | **{total_calls}** | **${total_cost:.2f}** | |")
 PYEOF
 ```
 
