@@ -187,16 +187,16 @@ tail -200 "$JSONL" | jq -s \
     (if $cliff then $prev_cliff_count + 1 else $prev_cliff_count end) as $cliff_count |
 
     # ── v3: Cost velocity (rolling 60-min window) ──
-    # Store cumulative session_cost at each timestamp, prune old entries
-    ($prev_cost_history + [{"ts": $now_epoch, "cost": ($cost * 100 | round / 100)}]
+    # Store per-call cost of the LAST api call (not tail-200 sum which shifts)
+    ($calls[-1] | .inp * 5 / 1000000 + .out * 25 / 1000000 + .cw * 6.25 / 1000000 + .cr * 0.5 / 1000000) as $last_call_cost |
+    ($prev_cost_history + [{"ts": $now_epoch, "cost": ($last_call_cost * 10000 | round / 10000)}]
      | [.[] | select(.ts > ($now_epoch - 3600))]) as $cost_history |
 
-    # Velocity = (newest_cost - oldest_cost) / hours_elapsed
-    # cost values are cumulative session totals, so the difference = spend in window
+    # Velocity = sum of per-call costs in window / hours elapsed
     (if ($cost_history | length) >= 2 then
-      ($cost_history[-1].cost - $cost_history[0].cost) as $spend_in_window |
+      ([$cost_history[].cost] | add) as $total_spend |
       (($cost_history[-1].ts - $cost_history[0].ts) / 3600) as $hours |
-      (if $hours > 0.0833 then ($spend_in_window / $hours * 100 | round / 100) else null end)
+      (if $hours > 0.0833 then ($total_spend / $hours * 100 | round / 100) else null end)
      else null end) as $cost_velocity |
 
     {
