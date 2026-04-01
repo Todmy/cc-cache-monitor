@@ -220,10 +220,11 @@ elif (( cliff_count_int > 1 )); then
   cliff_suffix=" | $(colorize $YELLOW "${cliff_count_int} cliffs")"
 fi
 
-# Cost velocity suffix
+# Cost velocity suffix (green $0 → yellow $10 → red $20+)
 vel_suffix=""
 if [[ "$cost_vel" != "null" && "$cost_vel" != "0" ]]; then
-  vel_suffix=" | \$${cost_vel}/hr"
+  vel_color=$(pct_color "${cost_vel%%.*}" 0 20)
+  vel_suffix=" | $(colorize "$vel_color" "\$${cost_vel}/hr")"
 else
   vel_suffix=" | $(colorize $GREY '$/hr: -')"
 fi
