@@ -4,17 +4,20 @@ Real-time cache health monitoring for Claude Code.
 
 I built this after a single Claude Code session burned through a shocking amount of tokens overnight. The prompt cache expired while cron jobs and Telegram messages kept firing into a 400K-token context — each API call rewrote the entire cache at 10x the normal cost. I had zero visibility that anything was wrong.
 
-cc-cache-monitor fixes that. It shows cache health in your statusline after every interaction, and warns you the moment things go wrong.
+cc-cache-monitor fixes that. Two-line statusline shows cache health, spending velocity, and rate limits after every interaction. Deep analysis via `/usage-details` breaks down hourly costs, cliff events, trigger attribution, and subagent spend.
 
 ## What it looks like
 
 ```
-PBaaS [Opus 4.6] ctx: 45% | cache: OK 98% $2.34 | 5h: 12% (3h21m)     ← all good
-PBaaS [Opus 4.6] ctx: 67% | cache: DRIFT 82% $5.10 | 5h: 12% (3h21m)  ← pay attention
-PBaaS [Opus 4.6] ctx: 67% | cache: CLIFF 5% $14.50 | 5h: 25% (2h45m)  ← /clear now
+PBaaS [Opus 4.6 (1M context)] ctx: 22% | 5h: 30% (1h14m) | 7d: 69% (Sat9:00AM)
+main | cache: OK 99% +3 subs | 3 cliffs | $4.20/hr
 ```
 
-Five statuses, calibrated against real session data (617 API calls, P5 of healthy phase = 95.3%):
+**Line 1** — session metadata: project, model, context usage, rate limits (5-hour and 7-day with time until reset).
+
+**Line 2** — cache health: git branch, cache status, subagent count, cliff counter, cost velocity.
+
+Five cache statuses, calibrated against real session data (617 API calls, P5 of healthy phase = 95.3%):
 
 | Status | Condition | Color | What to do |
 |--------|-----------|-------|------------|
@@ -24,6 +27,12 @@ Five statuses, calibrated against real session data (617 API calls, P5 of health
 | **MISS** | Cache hit <60% | Red | Cache is broken. Run `/clear` or `/compact`. |
 | **CLIFF** | Hit dropped >50pts in 1 call | Bright red | Cache just died. Run `/clear` immediately. |
 
+**Cliff counter** (`3 cliffs`) — how many times cache died this session. Even after recovery (status shows OK), the counter tells you problems happened. Resets on new session.
+
+**Cost velocity** (`$4.20/hr`) — spending rate over the last 60 minutes. Color-coded: green at $0-5/hr (normal), yellow at $10/hr, red at $20+/hr. If you see red after being away overnight, your cache was repeatedly expiring.
+
+**Subagent indicator** (`+3 subs`) — shows when Agent subagents are active. Their API costs are already included in the session total.
+
 ## Install
 
 ```bash
@@ -31,15 +40,15 @@ git clone https://github.com/Todmy/cc-cache-monitor.git
 cd cc-cache-monitor && ./install.sh
 ```
 
-Requires: `jq` (install with `brew install jq` on macOS or `apt install jq` on Linux).
+Requires: `jq` (`brew install jq` on macOS, `apt install jq` on Linux).
 
-The installer copies scripts to `~/.claude/scripts/`, the skill to `~/.claude/commands/`, and registers the PostToolUse hook in `~/.claude/settings.json`. Your existing hooks and statusline are preserved.
+The installer copies scripts to `~/.claude/scripts/`, the skill to `~/.claude/commands/`, registers the PostToolUse hook, and offers to set the two-line statusline as your primary statusline. Existing hooks are preserved.
 
 ## What gets installed
 
 ```
 ~/.claude/scripts/cache-metrics.sh      # PostToolUse hook (runs after each tool use)
-~/.claude/scripts/cache-statusline.sh   # Statusline fragment (renders cache status)
+~/.claude/scripts/cache-statusline.sh   # Two-line statusline (reads stdin + state + rate limits)
 ~/.claude/commands/usage-details.md     # /usage-details skill for deep analysis
 ```
 
@@ -47,7 +56,7 @@ The installer copies scripts to `~/.claude/scripts/`, the skill to `~/.claude/co
 
 Type `/usage-details` in Claude Code for a detailed report:
 
-**Hourly cache timeline** — see when cache was efficient and when it broke:
+**Hourly cache timeline** — when cache was efficient and when it broke:
 ```
 | Hour        | Calls | CacheW | CacheR | Ratio | Output | Cost   |
 |-------------|-------|--------|--------|-------|--------|--------|
@@ -63,7 +72,7 @@ CLIFF at 03:33:32 — cache hit dropped from 99.3% to 5.0%
   48 calls after cliff, estimated $109 excess spend
 ```
 
-**Trigger attribution** — shows who burned the money:
+**Trigger attribution** — who burned the money:
 ```
 | Trigger  | Events | API Calls | Cost   | %   |
 |----------|--------|-----------|--------|-----|
@@ -72,7 +81,7 @@ CLIFF at 03:33:32 — cache hit dropped from 99.3% to 5.0%
 | CRON     |      5 |        16 | $40.56 | 31% |
 ```
 
-**Subagent cost breakdown** (v2) — shows which Agent subagents were expensive:
+**Subagent cost breakdown** — which Agent subagents were expensive:
 ```
 | # | Description          | Type            | Calls | Cost   | Cache % |
 |---|----------------------|-----------------|-------|--------|---------|
@@ -81,24 +90,7 @@ CLIFF at 03:33:32 — cache hit dropped from 99.3% to 5.0%
 | 3 | Research docs        | general-purpose | ~6    | ~$1.80 | 88%     |
 ```
 
-Subagent costs are already included in the session total — the table shows how that total breaks down. The `~` prefix marks parallel subagents where attribution is approximate.
-
-## v3: Two-Line Statusline
-
-The statusline now shows two lines with complete session visibility:
-
-```
-PBaaS [Opus 4.6 (1M context)] ctx: 22% | 5h: 30% (1h14m) | 7d: 69% (Sat9:00AM)
-main | cache: OK 99% +3 subs | 3 cliffs | $4.20/hr
-```
-
-**Line 1** — session metadata: project name, model, context usage, rate limits (5-hour and 7-day with time until reset). Rate limits come from the Anthropic API with 60s caching.
-
-**Line 2** — cache health: git branch, cache status with subagent count, cliff counter, cost velocity.
-
-**Cliff counter** (`3 cliffs`) — tracks how many times the cache died during this session. Even after recovery (status shows OK), the counter tells you problems happened. Resets when you start a new session.
-
-**Cost velocity** (`$4.20/hr`) — spending rate over the last 60 minutes. Normal daytime use is $2-5/hr. If you see $20+/hr after being away, your cache was repeatedly expiring overnight.
+The `~` prefix marks parallel subagents where cost attribution is approximate.
 
 ### Multi-session overview
 
@@ -110,21 +102,21 @@ main | cache: OK 99% +3 subs | 3 cliffs | $4.20/hr
 
 ## How it works
 
-1. **PostToolUse hook** runs after every tool call (~39ms first run, ~17ms cached). Reads the last 200 lines of your active session transcript, extracts cache token metrics, computes rolling hit percentage (window=3), detects cliffs, writes state to `/tmp/cc-cache-state.json`.
+1. **PostToolUse hook** (~45ms) runs after every tool call. Reads the last 200 lines of the active session transcript, computes cache metrics (rolling 3-call hit%, cliff detection, subagent count), accumulates cliff counter and cost velocity from a rolling 60-minute window. Writes state to `/tmp/cc-cache-state.json`.
 
-2. **Statusline fragment** reads the state file (~13ms) and renders the colored status.
+2. **Statusline** reads three sources: Claude Code's stdin JSON (model, context%), the state file (cache health), and the Anthropic rate limits API (with 60s caching). Outputs two formatted lines.
 
-3. **mtime optimization** — if the transcript file hasn't changed since last check, the hook exits in <5ms. No wasted work.
+3. **mtime optimization** — if the transcript hasn't changed since last check, the hook exits in <5ms.
 
-Pure bash + jq. No python, no node, no external dependencies beyond jq.
+4. **Read-merge-write** — the hook reads existing state before writing, so cliff count and cost history accumulate across invocations. Session change (new JSONL) resets the counters.
+
+Bash + jq for the hook. Statusline adds curl (rate limits API) and python3 (time formatting). No npm, no pip install — stdlib only.
 
 ## Uninstall
 
 ```bash
 cd cc-cache-monitor && ./uninstall.sh
 ```
-
-Removes all installed files, cleans up the hook from settings.json, leaves everything else untouched.
 
 ## Why I built this
 
