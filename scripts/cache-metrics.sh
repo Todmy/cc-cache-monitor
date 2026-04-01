@@ -187,15 +187,16 @@ tail -200 "$JSONL" | jq -s \
     (if $cliff then $prev_cliff_count + 1 else $prev_cliff_count end) as $cliff_count |
 
     # ── v3: Cost velocity (rolling 60-min window) ──
-    # Append current cost, prune entries older than 60 minutes
+    # Store cumulative session_cost at each timestamp, prune old entries
     ($prev_cost_history + [{"ts": $now_epoch, "cost": ($cost * 100 | round / 100)}]
      | [.[] | select(.ts > ($now_epoch - 3600))]) as $cost_history |
 
-    # Compute velocity: sum of costs / hours elapsed
+    # Velocity = (newest_cost - oldest_cost) / hours_elapsed
+    # cost values are cumulative session totals, so the difference = spend in window
     (if ($cost_history | length) >= 2 then
-      ([$cost_history[].cost] | add) as $total_cost_window |
+      ($cost_history[-1].cost - $cost_history[0].cost) as $spend_in_window |
       (($cost_history[-1].ts - $cost_history[0].ts) / 3600) as $hours |
-      (if $hours > 0.0833 then ($total_cost_window / $hours * 100 | round / 100) else null end)
+      (if $hours > 0.0833 then ($spend_in_window / $hours * 100 | round / 100) else null end)
      else null end) as $cost_velocity |
 
     {
