@@ -2,7 +2,7 @@
 
 Real-time cache health monitoring for Claude Code.
 
-I built this after a single Claude Code session cost me $243 overnight. The prompt cache expired while cron jobs and Telegram messages kept firing into a 400K-token context — each API call rewrote the entire cache at $2.50 instead of reading it for $0.21. I had zero visibility that anything was wrong.
+I built this after a single Claude Code session burned through a shocking amount of tokens overnight. The prompt cache expired while cron jobs and Telegram messages kept firing into a 400K-token context — each API call rewrote the entire cache at 10x the normal cost. I had zero visibility that anything was wrong.
 
 cc-cache-monitor fixes that. It shows cache health in your statusline after every interaction, and warns you the moment things go wrong.
 
@@ -97,6 +97,12 @@ cd cc-cache-monitor && ./uninstall.sh
 ```
 
 Removes all installed files, cleans up the hook from settings.json, leaves everything else untouched.
+
+## Why I built this
+
+On March 31, 2026, I ran a Claude Code session for 20 hours. During the day, cache worked fine — 95%+ hit rate, ~$0.21 per API call. At 03:33 AM, the 1-hour cache TTL expired. From that moment, every call rewrote 400K tokens of context at $2.47 each. Cron jobs, Telegram messages, and manual prompts kept firing overnight — 75 calls that produced just 12K tokens of useful output.
+
+The per-useful-token cost was 19x higher at night than during the day. Not because the model got more expensive, but because nobody was watching the cache.
 
 ## License
 
