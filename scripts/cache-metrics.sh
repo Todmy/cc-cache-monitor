@@ -6,7 +6,7 @@
 # single jq -s call extracts usage, computes metrics, writes state JSON.
 #
 # Target: <100ms total, <5ms on mtime-unchanged fast path.
-# Output: /tmp/cc-cache-state.json
+# Output: /tmp/cc-cache-state/<session-uuid>.json
 #
 # Test: CC_CACHE_JSONL=test/sample-session.jsonl echo '{}' | ./cache-metrics.sh
 
@@ -15,8 +15,9 @@ set -euo pipefail
 # Drain stdin (hook receives JSON context from Claude Code)
 cat > /dev/null &
 
-STATE_FILE="/tmp/cc-cache-state.json"
+STATE_DIR="/tmp/cc-cache-state"
 MTIME_FILE="/tmp/.cc-cache-last-mtime"
+mkdir -p "$STATE_DIR"
 
 # ──────────────────────────────────────────────────────────
 # 1. Locate the active session transcript
@@ -40,6 +41,10 @@ else
 
     if [[ -n "$CACHED_PATH" && -f "$CACHED_PATH" ]]; then
       CURRENT_MTIME=$(stat -f '%m' "$CACHED_PATH" 2>/dev/null || stat -c '%Y' "$CACHED_PATH" 2>/dev/null || echo 0)
+
+      # Derive STATE_FILE for fast-path check
+      CACHED_SLUG=$(basename "$CACHED_PATH" .jsonl)
+      STATE_FILE="${STATE_DIR}/${CACHED_SLUG}.json"
 
       # Every 30s, do a full rescan to detect project switches
       STALE=$(( NOW - ${CACHED_TS:-0} ))
@@ -81,6 +86,10 @@ fi
 
 printf '%s\n%s\n%s' "$JSONL" "$JSONL_MTIME" "$(date +%s)" > "$MTIME_FILE"
 
+# Derive per-session state file from JSONL filename (contains session UUID)
+SESSION_SLUG=$(basename "$JSONL" .jsonl)
+STATE_FILE="${STATE_DIR}/${SESSION_SLUG}.json"
+
 # ──────────────────────────────────────────────────────────
 # 3. Read existing state for accumulation (v3: read-merge-write)
 # ──────────────────────────────────────────────────────────
@@ -100,11 +109,7 @@ fi
 CURRENT_SESSION_ID=$(head -5 "$JSONL" | jq -r 'select(.sessionId != null) | .sessionId' 2>/dev/null | head -1)
 CURRENT_SESSION_ID="${CURRENT_SESSION_ID:-}"
 
-# Reset accumulators if session changed
-if [[ -n "$CURRENT_SESSION_ID" && "$CURRENT_SESSION_ID" != "$PREV_SESSION_ID" && -n "$PREV_SESSION_ID" ]]; then
-  PREV_CLIFF_COUNT=0
-  PREV_COST_HISTORY="[]"
-fi
+# No need to reset accumulators — state file is per-session (keyed by JSONL filename)
 
 # ──────────────────────────────────────────────────────────
 # 4. Extract last 200 lines → jq computes everything → state JSON

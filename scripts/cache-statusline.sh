@@ -7,13 +7,40 @@
 # Reads: stdin (Claude Code JSON), /tmp/cc-cache-state.json, rate limits API
 # Must complete in <50ms (excluding rate limits API call which is cached)
 
-STATE_FILE="/tmp/cc-cache-state.json"
+STATE_DIR="/tmp/cc-cache-state"
 METRICS_SCRIPT="${BASH_SOURCE[0]%/*}/cache-metrics.sh"
 USAGE_CACHE="/tmp/claude-usage-cache.json"
 USAGE_TTL=60
 
 # ── Read stdin (session context from Claude Code) ──
 input=$(cat)
+
+# ── Resolve per-session state file from workspace dir ──
+# Each Claude Code session has its own JSONL → own state file.
+# Derive the project dir from stdin workspace, find the most recent JSONL for it.
+STATE_FILE=""
+cwd_raw=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // ""' 2>/dev/null)
+if [[ -n "$cwd_raw" ]]; then
+  # Claude Code stores sessions under ~/.claude/projects/-<path-with-dashes>/
+  project_slug=$(echo "$cwd_raw" | sed 's|/|-|g')
+  project_dir="$HOME/.claude/projects/${project_slug}"
+  if [[ -d "$project_dir" ]]; then
+    # Find the most recently modified JSONL in this project dir
+    latest_jsonl=""
+    latest_mtime=0
+    while IFS= read -r -d '' f; do
+      mtime=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || echo 0)
+      if (( mtime > latest_mtime )); then
+        latest_mtime=$mtime
+        latest_jsonl="$f"
+      fi
+    done < <(find "$project_dir" -maxdepth 1 -name '*.jsonl' -print0 2>/dev/null)
+    if [[ -n "$latest_jsonl" ]]; then
+      SESSION_SLUG=$(basename "$latest_jsonl" .jsonl)
+      STATE_FILE="${STATE_DIR}/${SESSION_SLUG}.json"
+    fi
+  fi
+fi
 
 # ── ANSI helpers ──
 GREEN=40; YELLOW=220; RED=196; GREY=245; PURPLE=141
@@ -102,16 +129,18 @@ except:print('?')
 }
 
 # ── On resume: refresh state if stale ──
-if [[ -f "$STATE_FILE" ]]; then
+if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
   state_mtime=$(stat -f '%m' "$STATE_FILE" 2>/dev/null || stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo 0)
   now=$(date +%s)
   if (( now - state_mtime > 30 )); then
     echo "" | "$METRICS_SCRIPT" 2>/dev/null || true
-    new_mtime=$(stat -f '%m' "$STATE_FILE" 2>/dev/null || stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo 0)
-    if [[ "$new_mtime" == "$state_mtime" ]]; then
+    if [[ ! -s "$STATE_FILE" ]]; then
       STATE_FILE=""  # no active session
     fi
   fi
+elif [[ -z "$STATE_FILE" ]]; then
+  # No state file resolved — trigger metrics to populate
+  echo "" | "$METRICS_SCRIPT" 2>/dev/null || true
 fi
 
 # ══════════════════════════════════════════════
@@ -220,10 +249,10 @@ elif (( cliff_count_int > 1 )); then
   cliff_suffix=" | $(colorize $YELLOW "${cliff_count_int} cliffs")"
 fi
 
-# Cost velocity suffix (green $0 → yellow $10 → red $20+)
+# Cost velocity suffix (green $0 → yellow $25 → red $50+)
 vel_suffix=""
 if [[ "$cost_vel" != "null" && "$cost_vel" != "0" ]]; then
-  vel_color=$(pct_color "${cost_vel%%.*}" 0 20)
+  vel_color=$(pct_color "${cost_vel%%.*}" 0 50)
   vel_suffix=" | $(colorize "$vel_color" "\$${cost_vel}/hr")"
 else
   vel_suffix=" | $(colorize $GREY '$/hr: -')"
