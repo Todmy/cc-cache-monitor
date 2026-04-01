@@ -98,14 +98,6 @@ cd cc-cache-monitor && ./uninstall.sh
 
 Removes all installed files, cleans up the hook from settings.json, leaves everything else untouched.
 
-## The $243 incident
-
-On March 31, 2026, I ran a Claude Code session for 20 hours. During the day, cache worked fine — 95%+ hit rate, ~$0.21 per API call. At 03:33 AM, the 1-hour cache TTL expired. From that moment, every call rewrote 400K tokens of context at $2.47 each. Cron jobs, Telegram messages, and manual prompts kept firing. By morning: $243 total, with $151 burned overnight on 75 calls that produced 12K tokens of useful output.
-
-The per-useful-token cost was 19x higher at night than during the day. Not because the model got more expensive, but because nobody was watching the cache.
-
-That's why I built this.
-
 ## License
 
 MIT
