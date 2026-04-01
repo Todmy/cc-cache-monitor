@@ -218,4 +218,11 @@ tail -200 "$JSONL" | jq -s \
       cost_history: $cost_history
     }
   end
-' > "$STATE_FILE" 2>/dev/null || true
+' > "${STATE_FILE}.tmp" 2>/dev/null || true
+
+# Atomic update: only overwrite state if jq produced output
+if [[ -s "${STATE_FILE}.tmp" ]]; then
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+else
+  rm -f "${STATE_FILE}.tmp"
+fi
