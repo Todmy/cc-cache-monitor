@@ -224,6 +224,8 @@ fi
 vel_suffix=""
 if [[ "$cost_vel" != "null" && "$cost_vel" != "0" ]]; then
   vel_suffix=" | \$${cost_vel}/hr"
+else
+  vel_suffix=" | $(colorize $GREY '$/hr: -')"
 fi
 
 # Build line 2
