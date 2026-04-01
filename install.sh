@@ -44,16 +44,30 @@ else
   echo '  "hooks": { "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "~/.claude/scripts/cache-metrics.sh" }] }] }'
 fi
 
-# Check statusline
+# Check statusline — v3 is a full orchestrator (two-line output)
 existing_sl=$(jq -r '.statusLine.command // empty' "$SETTINGS" 2>/dev/null || true)
-if [[ -n "$existing_sl" ]]; then
+if [[ -n "$existing_sl" && "$existing_sl" != "~/.claude/scripts/cache-statusline.sh" ]]; then
   echo ""
   echo "  You have an existing statusline: $existing_sl"
-  echo "  To add cache metrics, add this to your statusline script:"
+  echo "  cc-cache-monitor v3 includes a full two-line statusline with:"
+  echo "    Line 1: project [model] ctx% | 5h rate limit | 7d rate limit"
+  echo "    Line 2: branch | cache status +subs | cliffs | \$/hr"
   echo ""
-  echo '    cache_line=$(~/.claude/scripts/cache-statusline.sh)'
-  echo '    # Then include $cache_line in your output'
+  read -p "  Replace existing statusline? (y/N) " -n 1 -r reply
   echo ""
+  if [[ "$reply" =~ ^[Yy]$ ]]; then
+    # Backup existing
+    if [[ -f "${existing_sl/#\~/$HOME}" ]]; then
+      cp "${existing_sl/#\~/$HOME}" "${existing_sl/#\~/$HOME}.bak"
+      echo "  Backed up existing to ${existing_sl}.bak"
+    fi
+    tmpfile=$(mktemp)
+    jq '.statusLine = {"type": "command", "command": "~/.claude/scripts/cache-statusline.sh"}' "$SETTINGS" > "$tmpfile" && mv "$tmpfile" "$SETTINGS"
+    echo "  Set cache-statusline.sh as statusline"
+  else
+    echo "  Keeping existing statusline. To integrate manually:"
+    echo '    cache_line=$(~/.claude/scripts/cache-statusline.sh)'
+  fi
 else
   tmpfile=$(mktemp)
   jq '.statusLine = {"type": "command", "command": "~/.claude/scripts/cache-statusline.sh"}' "$SETTINGS" > "$tmpfile" && mv "$tmpfile" "$SETTINGS"
@@ -63,7 +77,8 @@ fi
 echo ""
 echo "Done! Restart Claude Code to activate."
 echo ""
-echo "Usage:"
-echo "  Statusline shows: cache: OK 95%"
-echo "  Deep analysis:    /usage-details"
-echo "  Multi-session:    /usage-details --since 20260401"
+echo "v3 statusline format:"
+echo "  PBaaS [Opus 4.6] ctx: 22% | 5h: 30% (1h14m) | 7d: 69% (Sat9:00AM)"
+echo "  main | cache: OK 99% +3 subs | 3 cliffs | \$4.20/hr"
+echo ""
+echo "Deep analysis: /usage-details"

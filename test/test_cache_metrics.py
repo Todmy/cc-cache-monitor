@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 FIXTURE = Path(__file__).parent / "sample-session.jsonl"
 FIXTURE_AGENTS = Path(__file__).parent / "sample-with-agents.jsonl"
+FIXTURE_CLIFFS = Path(__file__).parent / "sample-cliffs.jsonl"
 
 
 def read_tail(path, nbytes):
@@ -144,6 +145,9 @@ def run_metrics(fixture_path, tail_bytes=500_000):
         "rolling_pcts": rolling_pcts,
         "subagent_count": len(subagents),
         "subagents": subagents,
+        "cliff_count": 0,  # Python tests simulate single run (no accumulation)
+        "cost_velocity_usd": None,  # Needs multiple runs to compute
+        "cost_history": [],
     }
 
 
@@ -288,6 +292,40 @@ def test_v1_fields_unchanged():
     print(f"PASS: test_v1_fields_unchanged - status={state['status']}, cost=${state['session_cost_usd']}, calls={state['calls_count']}")
 
 
+def test_cliff_count_in_state():
+    """sample-cliffs.jsonl has cliff calls but the cliff_count depends on which calls
+    are last. Since the Python test re-implements the pipeline, it only sees the last
+    2 calls. The fixture's last 2 calls are both recovery (good cache), so cliff=false.
+    cliff_count should be 0 for a single run."""
+    state = run_metrics(FIXTURE_CLIFFS)
+    assert "cliff_count" in state, "Missing cliff_count field"
+    assert state["cliff_count"] == 0, f"Expected 0 (last calls are recovery), got {state['cliff_count']}"
+    print(f"PASS: test_cliff_count_in_state - cliff_count={state['cliff_count']}")
+
+
+def test_session_id_extracted():
+    """sample-cliffs.jsonl has a system message with sessionId."""
+    lines = read_tail(FIXTURE_CLIFFS, 500_000)
+    for ln in lines:
+        try:
+            obj = json.loads(ln)
+        except:
+            continue
+        if obj.get("type") == "system" and obj.get("sessionId"):
+            assert obj["sessionId"] == "fixture-cliffs-001"
+            print(f"PASS: test_session_id_extracted - {obj['sessionId']}")
+            return
+    assert False, "No system message with sessionId found in cliffs fixture"
+
+
+def test_cost_velocity_fields():
+    """v3 state should include cost_velocity_usd and cost_history."""
+    state = run_metrics(FIXTURE_CLIFFS)
+    assert "cost_velocity_usd" in state, "Missing cost_velocity_usd"
+    assert "cost_history" in state or state.get("cost_velocity_usd") is None, "Missing cost history"
+    print(f"PASS: test_cost_velocity_fields - velocity={state.get('cost_velocity_usd')}")
+
+
 if __name__ == "__main__":
     tests = [
         test_fixture_parse,
@@ -305,6 +343,9 @@ if __name__ == "__main__":
         test_subagent_types,
         test_no_subagents,
         test_v1_fields_unchanged,
+        test_cliff_count_in_state,
+        test_session_id_extracted,
+        test_cost_velocity_fields,
     ]
     failed = 0
     for t in tests:

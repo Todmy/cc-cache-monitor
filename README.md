@@ -83,17 +83,22 @@ CLIFF at 03:33:32 — cache hit dropped from 99.3% to 5.0%
 
 Subagent costs are already included in the session total — the table shows how that total breaks down. The `~` prefix marks parallel subagents where attribution is approximate.
 
-## v2: Subagent Tracking
+## v3: Two-Line Statusline
 
-When your session spawns subagents via the Agent tool, the statusline shows a count:
+The statusline now shows two lines with complete session visibility:
 
 ```
-cache: OK 98% +3 subs     ← 3 subagents detected
-cache: DRIFT 82% +1 sub   ← 1 subagent detected
-cache: OK 98%              ← no subagents (v1 behavior)
+PBaaS [Opus 4.6 (1M context)] ctx: 22% | 5h: 30% (1h14m) | 7d: 69% (Sat9:00AM)
+main | cache: OK 99% +3 subs | 3 cliffs | $4.20/hr
 ```
 
-Run `/usage-details` to see which subagents were expensive and where the tokens went. Subagent API calls are already counted in the session total — the indicator just makes their presence visible.
+**Line 1** — session metadata: project name, model, context usage, rate limits (5-hour and 7-day with time until reset). Rate limits come from the Anthropic API with 60s caching.
+
+**Line 2** — cache health: git branch, cache status with subagent count, cliff counter, cost velocity.
+
+**Cliff counter** (`3 cliffs`) — tracks how many times the cache died during this session. Even after recovery (status shows OK), the counter tells you problems happened. Resets when you start a new session.
+
+**Cost velocity** (`$4.20/hr`) — spending rate over the last 60 minutes. Normal daytime use is $2-5/hr. If you see $20+/hr after being away, your cache was repeatedly expiring overnight.
 
 ### Multi-session overview
 

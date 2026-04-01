@@ -257,6 +257,107 @@ def test_e2e_with_subagents():
     print("\nAll e2e tests (including subagent) passed")
 
 
+def test_e2e_cliff_accumulation():
+    """Run hook against cliffs fixture — verify cliff_count and session_id in state."""
+    script = Path(__file__).parent.parent / "scripts" / "cache-metrics.sh"
+    fixture = Path(__file__).parent / "sample-cliffs.jsonl"
+    global_state = Path("/tmp/cc-cache-state.json")
+
+    env = os.environ.copy()
+    env["CC_CACHE_JSONL"] = str(fixture)
+
+    # Clear state
+    try:
+        os.unlink("/tmp/.cc-cache-last-mtime")
+        os.unlink("/tmp/cc-cache-state.json")
+    except FileNotFoundError:
+        pass
+
+    # Run hook
+    subprocess.run(["bash", str(script)], input=b"{}", capture_output=True, env=env, timeout=5)
+    assert global_state.exists(), "State file not created"
+
+    state = json.loads(global_state.read_text())
+    assert "cliff_count" in state, "Missing cliff_count"
+    assert "session_id" in state, "Missing session_id"
+    assert state["session_id"] == "fixture-cliffs-001", f"Expected fixture-cliffs-001, got {state['session_id']}"
+    assert isinstance(state["cliff_count"], int), f"cliff_count should be int, got {type(state['cliff_count'])}"
+    assert "cost_history" in state, "Missing cost_history"
+    print(f"PASS: e2e cliff accumulation - cliff_count={state['cliff_count']}, session_id={state['session_id']}")
+
+
+def test_two_line_output():
+    """Statusline script should output exactly 2 lines when state exists."""
+    script = Path(__file__).parent.parent / "scripts" / "cache-metrics.sh"
+    statusline = Path(__file__).parent.parent / "scripts" / "cache-statusline.sh"
+    fixture = Path(__file__).parent / "sample-with-agents.jsonl"
+    mock_input = Path(__file__).parent / "sample-statusline-input.json"
+
+    env = os.environ.copy()
+    env["CC_CACHE_JSONL"] = str(fixture)
+
+    # Clear state and populate
+    try:
+        os.unlink("/tmp/.cc-cache-last-mtime")
+    except FileNotFoundError:
+        pass
+    subprocess.run(["bash", str(script)], input=b"{}", capture_output=True, env=env, timeout=5)
+
+    # Run statusline with mock stdin
+    with open(mock_input, "rb") as stdin_data:
+        result = subprocess.run(
+            ["bash", str(statusline)],
+            stdin=stdin_data,
+            capture_output=True,
+            env=env,
+            timeout=10,
+        )
+
+    output = result.stdout.decode("utf-8", errors="replace").strip()
+    lines = output.split("\n")
+    assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}: {output!r}"
+
+    # Line 1 should contain project and model
+    assert "PBaaS" in lines[0], f"Line 1 missing project name: {lines[0]}"
+    assert "Opus" in lines[0], f"Line 1 missing model: {lines[0]}"
+    assert "ctx:" in lines[0], f"Line 1 missing context: {lines[0]}"
+
+    # Line 2 should contain cache status
+    assert "cache:" in lines[1], f"Line 2 missing cache status: {lines[1]}"
+
+    print(f"PASS: test_two_line_output - {len(lines)} lines")
+    print(f"  L1: {lines[0][:80]}...")
+    print(f"  L2: {lines[1][:80]}...")
+
+
+def test_statusline_no_state():
+    """Statusline without state file should show cache: - on line 2."""
+    statusline = Path(__file__).parent.parent / "scripts" / "cache-statusline.sh"
+    mock_input = Path(__file__).parent / "sample-statusline-input.json"
+
+    try:
+        os.unlink("/tmp/cc-cache-state.json")
+    except FileNotFoundError:
+        pass
+
+    with open(mock_input, "rb") as stdin_data:
+        result = subprocess.run(
+            ["bash", str(statusline)],
+            stdin=stdin_data,
+            capture_output=True,
+            timeout=10,
+        )
+
+    output = result.stdout.decode("utf-8", errors="replace").strip()
+    lines = output.split("\n")
+    assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}"
+    assert "cache: -" in lines[1], f"Line 2 should show 'cache: -' when no state: {lines[1]}"
+    print("PASS: test_statusline_no_state - shows cache: - fallback")
+
+
 if __name__ == "__main__":
     test_e2e()
     test_e2e_with_subagents()
+    test_e2e_cliff_accumulation()
+    test_two_line_output()
+    test_statusline_no_state()

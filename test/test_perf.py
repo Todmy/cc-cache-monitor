@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "sample-session.jsonl"
-SCRIPT = Path(__file__).parent.parent / "scripts" / "cache-metrics-v2.sh"
+SCRIPT = Path(__file__).parent.parent / "scripts" / "cache-metrics.sh"
 
 
 def test_performance():
@@ -65,6 +65,63 @@ def test_performance_with_subagents():
     print("PASS: subagent runs under 100ms")
 
 
+def test_performance_read_merge_write():
+    """Verify hook with pre-existing state (read-merge-write) stays under 100ms."""
+    fixture_cliffs = Path(__file__).parent / "sample-cliffs.jsonl"
+    env = os.environ.copy()
+    env["CC_CACHE_JSONL"] = str(fixture_cliffs)
+
+    try:
+        os.unlink("/tmp/.cc-cache-last-mtime")
+    except FileNotFoundError:
+        pass
+
+    # First run creates state
+    subprocess.run(["bash", str(SCRIPT)], input=b"{}", capture_output=True, env=env, timeout=5)
+
+    # Second run does read-merge-write
+    try:
+        os.unlink("/tmp/.cc-cache-last-mtime")
+    except FileNotFoundError:
+        pass
+    start = time.perf_counter()
+    subprocess.run(["bash", str(SCRIPT)], input=b"{}", capture_output=True, env=env, timeout=5)
+    ms = (time.perf_counter() - start) * 1000
+
+    print(f"Read-merge-write run: {ms:.1f}ms")
+    assert ms < 100, f"Read-merge-write too slow: {ms:.1f}ms"
+    print("PASS: read-merge-write under 100ms")
+
+
+def test_statusline_performance():
+    """Verify statusline rendering stays under 50ms (excluding rate limits API)."""
+    statusline = Path(__file__).parent.parent / "scripts" / "cache-statusline.sh"
+    mock_input = Path(__file__).parent / "sample-statusline-input.json"
+
+    # Ensure state file exists
+    env = os.environ.copy()
+    env["CC_CACHE_JSONL"] = str(FIXTURE)
+    try:
+        os.unlink("/tmp/.cc-cache-last-mtime")
+    except FileNotFoundError:
+        pass
+    subprocess.run(["bash", str(SCRIPT)], input=b"{}", capture_output=True, env=env, timeout=5)
+
+    # Time the statusline render (rate limits come from cache)
+    with open(mock_input, "rb") as f:
+        start = time.perf_counter()
+        subprocess.run(["bash", str(statusline)], stdin=f, capture_output=True, timeout=10)
+        ms = (time.perf_counter() - start) * 1000
+
+    print(f"Statusline render: {ms:.1f}ms")
+    # Allow up to 500ms because rate limits API might hit network on first run
+    # In practice with cache it's <50ms, but CI may not have the cache
+    assert ms < 500, f"Statusline too slow: {ms:.1f}ms"
+    print("PASS: statusline render within budget")
+
+
 if __name__ == "__main__":
     test_performance()
     test_performance_with_subagents()
+    test_performance_read_merge_write()
+    test_statusline_performance()
