@@ -43,8 +43,8 @@ else
 
       # Every 30s, do a full rescan to detect project switches
       STALE=$(( NOW - ${CACHED_TS:-0} ))
-      if (( STALE < 30 )) && [[ "$CURRENT_MTIME" == "$CACHED_MTIME" ]]; then
-        exit 0  # <5ms — nothing changed, cache is fresh
+      if (( STALE < 30 )) && [[ "$CURRENT_MTIME" == "$CACHED_MTIME" ]] && [[ -s "$STATE_FILE" ]]; then
+        exit 0  # <5ms — nothing changed, cache is fresh, state is valid
       fi
 
       if (( STALE < 30 )); then
@@ -90,7 +90,7 @@ PREV_SESSION_ID=""
 PREV_COST_HISTORY="[]"
 NOW_EPOCH=$(date +%s)
 
-if [[ -f "$STATE_FILE" ]]; then
+if [[ -s "$STATE_FILE" ]]; then
   PREV_CLIFF_COUNT=$(jq -r '.cliff_count // 0' "$STATE_FILE" 2>/dev/null || echo 0)
   PREV_SESSION_ID=$(jq -r '.session_id // ""' "$STATE_FILE" 2>/dev/null || echo "")
   PREV_COST_HISTORY=$(jq -c '.cost_history // []' "$STATE_FILE" 2>/dev/null || echo "[]")
