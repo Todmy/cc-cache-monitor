@@ -12,6 +12,22 @@
 #   cache: CLIFF 5%  (bright red)
 
 STATE_FILE="/tmp/cc-cache-state.json"
+METRICS_SCRIPT="${BASH_SOURCE[0]%/*}/cache-metrics.sh"
+
+# On resume: if state file is stale (>30s), recalculate from transcript
+if [[ -f "$STATE_FILE" ]]; then
+  state_mtime=$(stat -f '%m' "$STATE_FILE" 2>/dev/null || stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  if (( now - state_mtime > 30 )); then
+    echo "" | "$METRICS_SCRIPT" 2>/dev/null || true
+    # If metrics didn't refresh the file, no active session — reset
+    new_mtime=$(stat -f '%m' "$STATE_FILE" 2>/dev/null || stat -c '%Y' "$STATE_FILE" 2>/dev/null || echo 0)
+    if [[ "$new_mtime" == "$state_mtime" ]]; then
+      printf "cache: -"
+      exit 0
+    fi
+  fi
+fi
 
 # No state file yet — session hasn't started or hook not installed
 if [[ ! -f "$STATE_FILE" ]]; then
