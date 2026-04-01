@@ -28,21 +28,35 @@ if [[ -n "${CC_CACHE_JSONL:-}" ]]; then
   [[ -f "$JSONL" ]] || exit 0
   JSONL_MTIME=$(stat -f '%m' "$JSONL" 2>/dev/null || stat -c '%Y' "$JSONL" 2>/dev/null || echo 0)
 else
-  # Fast path: try cached path first (avoids find)
+  # Fast path: try cached path. Invalidate every 30s to detect project switches.
+  PROJECTS_DIR="$HOME/.claude/projects"
+  [[ -d "$PROJECTS_DIR" ]] || exit 0
+
   if [[ -f "$MTIME_FILE" ]]; then
-    CACHED_PATH=$(head -1 "$MTIME_FILE" 2>/dev/null || true)
-    CACHED_MTIME=$(tail -1 "$MTIME_FILE" 2>/dev/null || echo 0)
+    CACHED_PATH=$(sed -n '1p' "$MTIME_FILE" 2>/dev/null || true)
+    CACHED_MTIME=$(sed -n '2p' "$MTIME_FILE" 2>/dev/null || echo 0)
+    CACHED_TS=$(sed -n '3p' "$MTIME_FILE" 2>/dev/null || echo 0)
+    NOW=$(date +%s)
+
     if [[ -n "$CACHED_PATH" && -f "$CACHED_PATH" ]]; then
       CURRENT_MTIME=$(stat -f '%m' "$CACHED_PATH" 2>/dev/null || stat -c '%Y' "$CACHED_PATH" 2>/dev/null || echo 0)
-      if [[ "$CURRENT_MTIME" == "$CACHED_MTIME" ]]; then
-        exit 0  # <5ms — nothing changed
+
+      # Every 30s, do a full rescan to detect project switches
+      STALE=$(( NOW - ${CACHED_TS:-0} ))
+      if (( STALE < 30 )) && [[ "$CURRENT_MTIME" == "$CACHED_MTIME" ]]; then
+        exit 0  # <5ms — nothing changed, cache is fresh
       fi
-      JSONL="$CACHED_PATH"
-      JSONL_MTIME="$CURRENT_MTIME"
+
+      if (( STALE < 30 )); then
+        # File changed but cache is fresh — reuse path, skip find
+        JSONL="$CACHED_PATH"
+        JSONL_MTIME="$CURRENT_MTIME"
+      fi
+      # If stale (>30s), fall through to full find
     fi
   fi
 
-  # Cold start or cached path gone — find most recent .jsonl
+  # Cold start, stale cache, or cached path gone — find most recent .jsonl
   if [[ -z "${JSONL:-}" ]]; then
     PROJECTS_DIR="$HOME/.claude/projects"
     [[ -d "$PROJECTS_DIR" ]] || exit 0
@@ -55,7 +69,7 @@ else
         JSONL_MTIME=$mtime
         JSONL="$f"
       fi
-    done < <(find "$PROJECTS_DIR" -name '*.jsonl' -print0 2>/dev/null)
+    done < <(find "$PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -print0 2>/dev/null)
 
     [[ -n "$JSONL" ]] || exit 0
   fi
@@ -65,7 +79,7 @@ fi
 # 2. Store path + mtime for next fast-path check
 # ──────────────────────────────────────────────────────────
 
-printf '%s\n%s' "$JSONL" "$JSONL_MTIME" > "$MTIME_FILE"
+printf '%s\n%s\n%s' "$JSONL" "$JSONL_MTIME" "$(date +%s)" > "$MTIME_FILE"
 
 # ──────────────────────────────────────────────────────────
 # 3. Extract last 200 lines → jq computes everything → state JSON
