@@ -5,7 +5,7 @@ Real-time cache health monitoring for Claude Code.
 ## Quick Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/cc-cache-monitor.git
+git clone https://github.com/Todmy/cc-cache-monitor
 cd cc-cache-monitor && ./install.sh
 ```
 
